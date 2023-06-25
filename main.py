@@ -4,20 +4,32 @@ import CloudFlare
 import json
 import requests
 import time
+import logging
 
-config = json.load(open("config.json"))
+# Set up logging
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler()])
+logger = logging.getLogger(__name__)
 
+# Load configuration file
+with open("config.json") as f:
+    config = json.load(f)
 
-def get_public_ip():  # sourcery skip: raise-specific-error
+# Function to query public IP address
+def get_public_ip(attempts=3):
     endpoint = "https://ipinfo.io/json"
-    response = requests.get(endpoint, verify=True)
 
-    if response.status_code != 200:
-        raise Exception(f"Status: {response.status_code}")
+    for _ in range(attempts):
+        response = requests.get(endpoint, verify=True)
 
-    data = response.json()
-    return data["ip"]
+        if response.status_code == 200:
+            return response.json().get("ip")
 
+        time.sleep(1)
+
+    logger.error(f"Failed to get public IP after {attempts} attempts.")
+    return None
 
 class CloudflarePatcher:
     def __init__(self, account) -> None:
@@ -31,7 +43,7 @@ class CloudflarePatcher:
             for variable in self.account["variables"]
         }
 
-        print("New Variables:", variables)
+        logger.info(f"New Variables: {variables}")
         return variables
 
     def parse_record(self, record):
@@ -49,10 +61,9 @@ class CloudflarePatcher:
                     self.zone_id, dns_record["id"], data=record
                 )
                 dns_record["value"] = record
-                print(f"Updated {dns_record}")
+                logger.info(f"Updated {dns_record}")
             except Exception as e:
-                exit(f"/zones.dns_records.patch {dns_record} - {e}")
-
+                logger.error(f"Error in /zones.dns_records.patch {dns_record} - {e}")
 
 def main():
     last_ip = None
@@ -63,7 +74,7 @@ def main():
                 patcher = CloudflarePatcher(account)
                 patcher.patch_dns_records()
             last_ip = curr_ip
-        print("Sleeping for 15 minutes")
+        logger.info("Sleeping for 15 minutes")
         time.sleep(60 * 15)
 
 
