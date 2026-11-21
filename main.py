@@ -30,7 +30,7 @@ def log(msg):
     print(msg, flush=True)
 
 
-def auth_headers(cfg):
+def auth_headers():
     token = os.environ.get("CF_API_TOKEN")
     if token:
         return {"Authorization": f"Bearer {token}"}
@@ -76,11 +76,16 @@ def find_zone_id(headers, domain):
     return zones[0]["id"]
 
 
-def find_record(headers, zone_id, name):
-    recs = cf_request("GET", f"/zones/{zone_id}/dns_records?name={name}",
-                      headers)
+def find_record(headers, zone_id, name, rtype="A"):
+    """Find exactly one DNS record of the given type and name."""
+    recs = [r for r in cf_request(
+        "GET", f"/zones/{zone_id}/dns_records?name={name}", headers)
+        if r["type"] == rtype]
     if not recs:
-        raise RuntimeError(f"record not found: {name}")
+        raise RuntimeError(f"record not found: {name} ({rtype})")
+    if len(recs) > 1:
+        raise RuntimeError(f"ambiguous: {len(recs)} {rtype} records for {name} "
+                           f"— specify record id explicitly in config")
     return recs[0]
 
 
@@ -92,14 +97,14 @@ def resolve_records(headers, account):
     out = []
     for rec in account["dns_records"]:
         r = dict(rec["value"])
+        rtype = r.get("type", "A")
         if rec.get("name") and not rec.get("id"):
-            found = find_record(headers, zone_id, rec["name"])
+            found = find_record(headers, zone_id, rec["name"], rtype)
             rec = dict(rec, id=found["id"])
             r.setdefault("type", found["type"])
             r.setdefault("name", found["name"])
             r.setdefault("ttl", found["ttl"])
             r.setdefault("proxied", found["proxied"])
-        r.setdefault("ttl", 60)
         out.append((rec["id"], r, r.get("name", rec.get("id"))))
     return zone_id, out
 
@@ -111,40 +116,37 @@ def substitute(record, variables):
     return record
 
 
-def patch_dns_records(headers, account):
+def patch_dns_records(headers, account, ip):
+    """Patch all records for one account. Raises on any failure."""
     zone_id, records = resolve_records(headers, account)
+    failures = []
     for rec_id, value, name in records:
-        value = substitute(value, {"public_ip": _current_ip})
+        value = substitute(value, {"public_ip": ip})
         try:
             cf_request("PATCH", f"/zones/{zone_id}/dns_records/{rec_id}",
                        headers, value)
-            log(f"updated {name} -> {value.get('content')}")
+            log(f"updated {name} -> {ip}")
         except Exception as e:
-            log(f"ERROR updating {name}: {e} (continuing)")
-
-
-_current_ip = None
-
-
-def run(headers, config):
-    global _current_ip
-    _current_ip = get_public_ip()
-    log(f"current public IP: {_current_ip}")
-    for account in config:
-        patch_dns_records(headers, account)
+            log(f"ERROR updating {name}: {e} (continuing with the rest)")
+            failures.append(name)
+    if failures:
+        raise RuntimeError(f"patch failed for: {', '.join(failures)}")
 
 
 def main():
     cfg_path = os.environ.get("CF_PATCHER_CONFIG", "config.json")
     config = json.load(open(cfg_path))
-    headers = auth_headers(config)
+    headers = auth_headers()
     last_ip = None
     fail_count = 0
     while True:
         try:
             ip = get_public_ip()
             if ip != last_ip:
-                run(headers, config)
+                # single detected IP used for all updates AND bookkeeping;
+                # a failure keeps last_ip stale so the next pass retries
+                for account in config:
+                    patch_dns_records(headers, account, ip)
                 last_ip = ip
                 fail_count = 0
             else:
@@ -152,8 +154,7 @@ def main():
         except Exception as e:
             fail_count += 1
             wait = RETRY_BACKOFF[min(fail_count - 1, len(RETRY_BACKOFF) - 1)]
-            log(f"ERROR ({e}) — retrying in {wait}s "
-                f"(attempt {fail_count})")
+            log(f"ERROR ({e}) — retrying in {wait}s (attempt {fail_count})")
             time.sleep(wait)
             continue
         time.sleep(CHECK_INTERVAL)
