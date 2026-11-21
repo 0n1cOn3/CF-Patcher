@@ -16,11 +16,17 @@ import time
 
 import requests
 
-IP_ENDPOINTS = [
-    "https://cloudflare.com/cdn-cgi/trace",  # ip=1.2.3.4 line
-    "https://api.ipify.org",
-    "https://ifconfig.me/ip",
-]
+IP_ENDPOINTS = {
+    "ipv4": [
+        "https://cloudflare.com/cdn-cgi/trace",  # ip=1.2.3.4 line
+        "https://api4.ipify.org",
+        "https://v4.ifconfig.me",
+    ],
+    "ipv6": [
+        "https://api6.ipify.org",
+        "https://v6.ifconfig.me",
+    ],
+}
 IP_TIMEOUT = 10
 CHECK_INTERVAL = int(os.environ.get("CF_CHECK_INTERVAL", "300"))  # seconds
 RETRY_BACKOFF = (10, 60, 300, 900)
@@ -47,15 +53,14 @@ def _is_ipv4(ip):
 
 def get_public_ip(family="ipv4"):
     """Query multiple endpoints; require a strict majority for one answer."""
-    want_v4 = family == "ipv4"
     answers = {}
-    for url in IP_ENDPOINTS:
+    for url in IP_ENDPOINTS[family]:
         try:
             r = requests.get(url, timeout=IP_TIMEOUT)
             r.raise_for_status()
             ip = (r.text.split("ip=")[1].split()[0] if "ip=" in r.text
                   else r.text.strip())
-            if ip and _is_ipv4(ip) == want_v4:
+            if ip and _is_ipv4(ip) == (family == "ipv4"):
                 answers[ip] = answers.get(ip, 0) + 1
         except Exception as e:
             log(f"IP endpoint {url} failed: {e}")
@@ -77,13 +82,13 @@ def cf_request(method, path, headers, data=None):
 
 
 def cf_paginate(path, headers):
-    """Yield results across all pages (per_page=100)."""
+    """Yield results across all pages (per_page=50)."""
     page = 1
     while True:
         result = cf_request("GET", f"{path}{'&' if '?' in path else '?'}"
-                            f"per_page=100&page={page}", headers)
+                            f"per_page=50&page={page}", headers)
         yield from result
-        if len(result) < 100:
+        if len(result) < 50:
             return
         page += 1
 
@@ -126,8 +131,10 @@ def patch_record(headers, zone_id, rec, ip):
         r.setdefault("ttl", found["ttl"])
         r.setdefault("proxied", found["proxied"])
     r.setdefault("ttl", 60)
-    family = "ipv4" if r.get("type", "A") == "A" else "ipv6"
-    record_ip = ip if family == "ipv4" else get_public_ip("ipv6")
+    rtype = r.get("type", "A")
+    record_ip = ip
+    if rtype == "AAAA":
+        record_ip = get_public_ip("ipv6")
     r = substitute(r, {"public_ip": record_ip})
     cf_request("PATCH", f"/zones/{zone_id}/dns_records/{rec['id']}",
                headers, r)
