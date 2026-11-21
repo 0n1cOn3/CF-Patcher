@@ -1,3 +1,7 @@
-web:
-  build: .
-  restart: always
+services:
+  cf-patcher:
+    build: .
+    restart: always
+    env_file: .env   # CF_API_TOKEN (or CF_API_EMAIL+CF_API_KEY), optional CF_PATCHER_CONFIG
+    volumes:
+      - ./config.json:/app/config.json:ro
