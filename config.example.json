@@ -4,7 +4,9 @@
     "dns_records": [
       {
         "name": "home.example.com",
-        "value": { "content": "{{public_ip}}", "ttl": 60, "proxied": false }
+        "value": {
+          "content": "{{public_ip}}"
+        }
       }
     ]
   }
