@@ -1,46 +1,42 @@
 # 🚀 CF-Patcher
 
-CF-Patcher is a tool that allows you to update DNS entries, even if you have a dynamic IP address. This is commonly known as DynDNS. This tool requires a Cloudflare account to manage your domain's DNS records.
+DynDNS for Cloudflare: watches your public IP, patches DNS records on change.
 
-## 📋 Requirements
+## 🛠️ Run
 
-In order to use CF-Patcher, you will need:
+```bash
+cp config.example.json config.json   # edit: your domain + record names
+echo CF_API_TOKEN=your-token > .env  # scoped token: Zone:DNS:Edit
+docker compose up -d
+```
 
-A Cloudflare account where you manage your domain with DNS records
-A Global API Key
-## 🛠️ Installation
+No Dockerfile image rebuild needed for config changes — config is mounted, not baked in.
 
-Follow these steps to install CF-Patcher:
+## 🔐 Auth (env, never in config.json)
 
-Clone this project to your computer:
+Preferred: `CF_API_TOKEN` (create in Cloudflare → My Profile → API Tokens,
+template "Edit zone DNS", scoped to your zone). Legacy fallback:
+`CF_API_EMAIL` + `CF_API_KEY` (Global API Key — not recommended).
 
-``git clone https://github.com.0n1cOn3/CF-Patcher
-cd CF-Patcher``
+Find zone/record ids (optional — modern config resolves them by name):
 
-## Build the Docker image:
+```bash
+CF_API_TOKEN=xxx DOMAIN=example.com python3 zone-locator.py
+```
 
-``sudo docker build -t CF-Patcher``
+## ⚙️ Config
 
-## Start the Docker container:
-``sudo docker compose up -d``
-## ⚙️ Configuration
+`config.json`: list of accounts, each with `domain` and `dns_records`.
+Records are matched by `name` (zone/record ids resolved automatically);
+`{{public_ip}}` is substituted with the current public IP. See
+`config.example.json`.
 
-To configure CF-Patcher, you will need 
+Env knobs:
+- `CF_CHECK_INTERVAL` — seconds between IP checks (default 300)
+- `CF_PATCHER_CONFIG` — path to config file (default `config.json`)
 
-- Run zone-locator.py:
-- Get the Global API Key from Cloudflare.
+## 🔁 Behaviour
 
-Fill in your email and API key in zone-locator.py, along with your domain name.
-
-> Run zone-locator.py, and you will get all DNS records for that domain.
-Take a note of ZONE ID and the DNS RECORD ID if you want to update them.
-
-> Edit config.json:
-Enter your email, zone ID, API key, DNS record ID, and whatever domain/subdomain you want to regularly update.
-Save the file and start the Docker image.
-
-## ⏰ Changing the IP Check Time
-
-The IP check is set to 15 minutes by default. You can adjust this in main.py under the variable:
-
-``print("Sleeping for 15 minutes") time.sleep(60 * 15)``
+- IP via multiple endpoints (Cloudflare trace, ipify, ifconfig.me), majority vote
+- Only patches when the IP actually changed
+- Failed updates are logged and retried with exponential backoff (10s→15min) — the loop never exits
