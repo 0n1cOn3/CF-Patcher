@@ -20,11 +20,11 @@ IP_ENDPOINTS = {
     "ipv4": [
         "https://cloudflare.com/cdn-cgi/trace",  # ip=1.2.3.4 line
         "https://api4.ipify.org",
-        "https://v4.ifconfig.me",
+        "https://v4.ifconfig.me/ip",
     ],
     "ipv6": [
         "https://api6.ipify.org",
-        "https://v6.ifconfig.me",
+        "https://v6.ifconfig.me/ip",
     ],
 }
 IP_TIMEOUT = 10
